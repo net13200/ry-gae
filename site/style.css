@@ -89,7 +89,7 @@ h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.02em; }
 .scanner[hidden] { display: none; }
 .scanner video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .reticle {
-  position: absolute; left: 8%; right: 8%; top: 30%; height: 18%;
+  position: absolute; left: 6%; right: 6%; top: 32%; height: clamp(64px, 11%, 120px);
   box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45); border-radius: 14px;
 }
 .reticle.hit { box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45), inset 0 0 0 2px #4ade80; }

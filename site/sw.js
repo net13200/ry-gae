@@ -1,4 +1,4 @@
-const CACHE = 'ryogae-v2';
+const CACHE = 'ryogae-v3';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon.svg',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 

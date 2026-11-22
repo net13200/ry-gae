@@ -33,7 +33,7 @@ function fmt(value, code, withSymbol = false) {
   const c = BY_CODE[code];
   let digits = c.digits;
   if (digits === 2 && Math.abs(value) >= 10000) digits = 0;
-  if (digits === 0 && Math.abs(value) < 10 && value !== 0) digits = 2;
+  if (digits === 0 && Math.abs(value) < 1 && value !== 0) digits = 2;
   const s = new Intl.NumberFormat('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(value);
   return withSymbol ? c.symbol + s : s;
 }
@@ -231,7 +231,7 @@ async function initOcr() {
       const w = await Tesseract.createWorker('eng', 1);
       await w.setParameters({
         tessedit_char_whitelist: '0123456789.,$¥₩₪',
-        tessedit_pageseg_mode: '7', // single line of text
+        tessedit_pageseg_mode: '6', // uniform block — copes with a stray partial line
       });
       ocrWorker = w;
     })();
@@ -267,7 +267,7 @@ async function openScanner() {
     statusEl.textContent = 'Could not load the text reader. Check your connection.';
     return;
   }
-  statusEl.textContent = 'Aim the box at a price';
+  statusEl.textContent = 'Fit just the price inside the box';
   running = true;
   loop();
 }
@@ -293,13 +293,49 @@ function grabReticle() {
   const sy = (rr.top - vr.top - offY) / scale;
   const sw = rr.width / scale;
   const sh = rr.height / scale;
-  const outW = Math.min(1000, Math.max(500, sw));
-  const outH = Math.round(outW * (sh / sw));
-  canvas.width = outW; canvas.height = outH;
-  ctx.filter = 'grayscale(1) contrast(1.6)';
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
-  ctx.filter = 'none';
+  if (textDetector) {
+    // Native detector works best on the untouched image.
+    const outW = Math.min(1000, sw);
+    canvas.width = outW; canvas.height = Math.round(outW * sh / sw);
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  } else {
+    binarize(video, sx, sy, sw, sh, 500);
+  }
   return true;
+}
+
+// Prepare a frame for Tesseract: scale to a fixed width, adaptive (Bradley) threshold
+// so uneven lighting / shadows on paper don't wash out digits, then add a white margin.
+function binarize(src, sx, sy, sw, sh, W) {
+  const H = Math.max(1, Math.round(W * sh / sw));
+  const pad = Math.round(Math.min(W, H) * 0.15) + 8;
+  canvas.width = W + pad * 2; canvas.height = H + pad * 2;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(src, sx, sy, sw, sh, pad, pad, W, H);
+  const img = ctx.getImageData(pad, pad, W, H), px = img.data, n = W * H;
+  const g = new Uint8Array(n);
+  for (let i = 0; i < n; i++) g[i] = (px[i * 4] * 77 + px[i * 4 + 1] * 150 + px[i * 4 + 2] * 29) >> 8;
+  const ii = new Float64Array((W + 1) * (H + 1)); // integral image
+  for (let y = 0; y < H; y++) {
+    let row = 0;
+    for (let x = 0; x < W; x++) { row += g[y * W + x]; ii[(y + 1) * (W + 1) + x + 1] = ii[y * (W + 1) + x + 1] + row; }
+  }
+  const half = Math.max(7, Math.round(Math.max(W, H) / 16));
+  const on = new Uint8Array(n);
+  let dark = 0;
+  for (let y = 0; y < H; y++) {
+    const y0 = Math.max(0, y - half), y1 = Math.min(H, y + half + 1);
+    for (let x = 0; x < W; x++) {
+      const x0 = Math.max(0, x - half), x1 = Math.min(W, x + half + 1);
+      const sum = ii[y1 * (W + 1) + x1] - ii[y0 * (W + 1) + x1] - ii[y1 * (W + 1) + x0] + ii[y0 * (W + 1) + x0];
+      const v = g[y * W + x] * (x1 - x0) * (y1 - y0) < sum * 0.85;
+      on[y * W + x] = v; dark += v;
+    }
+  }
+  const invert = dark > n / 2; // light text on a dark background
+  for (let i = 0; i < n; i++) px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = (on[i] ^ invert) ? 0 : 255;
+  ctx.putImageData(img, pad, pad);
 }
 
 async function readText() {
@@ -325,6 +361,7 @@ function parsePrice(text) {
     if (!isFinite(value) || value <= 0) continue;
     const digits = raw.replace(/\D/g, '').length;
     const detected = symbolToCode(m[1] || m[3] || '');
+    if (digits < 2 && !detected) continue; // stray "3", "7"… are almost always noise
     const score = digits + (detected ? 3 : 0);
     if (!best || score > best.score) best = { value, detected, score };
   }
@@ -375,17 +412,31 @@ async function loop() {
       try {
         const found = parsePrice(await readText());
         if (found) {
-          // Require two matching consecutive reads to avoid flicker.
-          history.push(found.value);
-          history = history.slice(-3);
-          const agree = history.filter((v) => v === found.value).length >= 2;
-          if (agree && (!current || current.amount !== found.value || current.detected !== found.detected)) {
-            showScan(found.value, found.detected);
+          // Vote over recent frames: OCR is noisy (e.g. ¥ misread as 4), the true price repeats.
+          // Reads where the currency symbol was recognised are more trustworthy, so they count double.
+          history.push(found);
+          history = history.slice(-8);
+          // A "¥" is often misread as a leading 4 or 7 ("41,670" for "¥1,670"): if the reading minus
+          // that digit was also seen recently, count it as the shorter value.
+          const seen = new Set(history.map((h) => h.value));
+          const canon = (v) => { const t = String(v); const u = Number(t.slice(1)); return /^[47]/.test(t) && seen.has(u) ? u : v; };
+          const score = new Map();
+          for (const h of history) { const v = canon(h.value); score.set(v, (score.get(v) || 0) + (h.detected ? 2 : 1)); }
+          let bestVal = null, bestS = 0;
+          for (const [v, sc] of score) if (sc > bestS) { bestS = sc; bestVal = v; }
+          const curS = current ? (score.get(current.amount) || 0) : 0;
+          // Hysteresis: a new value must clearly beat the one on screen.
+          const switchTo = !current ? bestS >= 3 : (bestVal !== current.amount && bestS >= 4 && bestS > curS);
+          const det = (v) => (history.find((h) => h.value === v && h.detected) || {}).detected || null;
+          if (switchTo) {
+            showScan(bestVal, det(bestVal));
             reticle.classList.add('hit');
             setTimeout(() => reticle.classList.remove('hit'), 400);
+          } else if (current && !current.detected && det(current.amount)) {
+            showScan(current.amount, det(current.amount)); // upgrade "Assuming…" to "Detected…"
           }
         } else if (!current) {
-          statusEl.textContent = 'Aim the box at a price';
+          statusEl.textContent = 'Fit just the price inside the box';
         }
       } catch (e) { console.warn(e); }
     }
