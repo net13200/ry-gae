@@ -2,7 +2,7 @@
   "id": "./",
   "name": "ryōgae 両替",
   "short_name": "ryōgae 両替",
-  "description": "Quick currency conversion for NIS, USD, KRW and JPY — type or point your camera at a price.",
+  "description": "Quick currency conversion for NIS, USD, EUR, KRW and JPY — type or point your camera at a price.",
   "lang": "en",
   "start_url": "./",
   "scope": "./",

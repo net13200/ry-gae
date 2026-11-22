@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ryōgae 両替</title>
-  <meta name="description" content="Quick currency conversion for NIS, USD, KRW and JPY — type or point your camera at a price.">
+  <meta name="description" content="Quick currency conversion for NIS, USD, EUR, KRW and JPY — type or point your camera at a price.">
   <meta name="theme-color" content="#c2410c">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -60,10 +60,11 @@
     </div>
     <div class="scan-top">
       <button id="close-camera" class="icon-btn" type="button" aria-label="Close camera">✕</button>
-      <div class="src-picker" id="src-picker" role="radiogroup" aria-label="Price currency"></div>
+      <div class="scan-hint"></div>
       <button id="torch" class="icon-btn" type="button" aria-label="Toggle flashlight" hidden>⚡</button>
     </div>
     <div class="scan-result" id="scan-result">
+      <div class="src-picker" id="src-picker" role="radiogroup" aria-label="Price currency"></div>
       <div class="scan-status" id="scan-status">Starting camera…</div>
       <div class="scan-amount" id="scan-amount"></div>
       <div class="scan-conv" id="scan-conv"></div>

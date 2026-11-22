@@ -4,13 +4,14 @@
 const CURRENCIES = [
   { code: 'ILS', name: 'Israeli shekel', flag: '🇮🇱', symbol: '₪', digits: 2 },
   { code: 'USD', name: 'US dollar',      flag: '🇺🇸', symbol: '$', digits: 2 },
+  { code: 'EUR', name: 'Euro',           flag: '🇪🇺', symbol: '€', digits: 2 },
   { code: 'KRW', name: 'Korean won',     flag: '🇰🇷', symbol: '₩', digits: 0 },
   { code: 'JPY', name: 'Japanese yen',   flag: '🇯🇵', symbol: '¥', digits: 0 },
 ];
 const BY_CODE = Object.fromEntries(CURRENCIES.map((c) => [c.code, c]));
 
 // Rough fallback (USD base) so the app works on very first offline launch.
-const FALLBACK = { base: 'USD', rates: { USD: 1, ILS: 3.7, KRW: 1400, JPY: 150 }, time: 0, source: 'built-in estimate' };
+const FALLBACK = { base: 'USD', rates: { USD: 1, ILS: 3.7, EUR: 0.92, KRW: 1400, JPY: 150 }, time: 0, source: 'built-in estimate' };
 const RATES_KEY = 'ryogae.rates';
 const STATE_KEY = 'ryogae.state';
 const STALE_MS = 6 * 60 * 60 * 1000;
@@ -21,6 +22,8 @@ const store = {
 };
 
 let rates = store.get(RATES_KEY) || FALLBACK;
+// Saved rates from an older version may lack a newly added currency.
+if (!CURRENCIES.every((c) => rates.rates && rates.rates[c.code])) rates = FALLBACK;
 const state = Object.assign({ active: 'USD', amount: 100, scanSrc: 'auto', lastScanSrc: 'JPY', zoom: 1 }, store.get(STATE_KEY) || {});
 const saveState = () => store.set(STATE_KEY, state);
 
@@ -57,7 +60,7 @@ async function fetchRates() {
       return { base: 'USD', rates: pick(j.rates), time: j.time_last_update_unix * 1000, source: 'open.er-api.com' };
     },
     async () => {
-      const r = await fetch('https://api.frankfurter.app/latest?from=USD&to=ILS,KRW,JPY', { cache: 'no-store' });
+      const r = await fetch('https://api.frankfurter.app/latest?from=USD&to=ILS,EUR,KRW,JPY', { cache: 'no-store' });
       const j = await r.json();
       return { base: 'USD', rates: pick({ USD: 1, ...j.rates }), time: Date.parse(j.date), source: 'ECB (frankfurter.app)' };
     },
@@ -230,7 +233,7 @@ async function initOcr() {
       await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
       const w = await Tesseract.createWorker('eng', 1);
       await w.setParameters({
-        tessedit_char_whitelist: '0123456789.,$¥₩₪',
+        tessedit_char_whitelist: '0123456789.,$€¥₩₪',
         tessedit_pageseg_mode: '6', // uniform block — copes with a stray partial line
       });
       ocrWorker = w;
@@ -414,7 +417,7 @@ async function readText() {
 // Pull the most price-like number from OCR text.
 function parsePrice(text) {
   const t = text.replace(/(?<=\d)[Oo]|[Oo](?=\d)/g, '0');
-  const re = /([$¥₩₪]|円|원|NIS|USD|JPY|KRW|ILS)?\s*(\d[\d,.\s]*\d|\d)\s*(円|원|₪|NIS|USD|JPY|KRW|ILS|yen|won)?/gi;
+  const re = /([$€¥₩₪]|円|원|NIS|USD|EUR|JPY|KRW|ILS)?\s*(\d[\d,.\s]*\d|\d)\s*(円|원|₪|€|NIS|USD|EUR|JPY|KRW|ILS|yen|won|euros?)?/gi;
   let best = null;
   let m;
   while ((m = re.exec(t))) {
@@ -443,6 +446,7 @@ function normalizeNumber(raw) {
 function symbolToCode(s) {
   s = s.toLowerCase();
   if (s === '$' || s === 'usd') return 'USD';
+  if (s === '€' || s === 'eur' || s === 'euro' || s === 'euros') return 'EUR';
   if (s === '¥' || s === '円' || s === 'jpy' || s === 'yen') return 'JPY';
   if (s === '₩' || s === '원' || s === 'krw' || s === 'won') return 'KRW';
   if (s === '₪' || s === 'nis' || s === 'ils') return 'ILS';
