@@ -421,6 +421,39 @@ render();
 showRatesTime();
 updateRates();
 
+// ---------- Install ----------
+const installBox = document.getElementById('install');
+const installBtn = document.getElementById('install-btn');
+const installText = document.getElementById('install-text');
+let deferredPrompt = null;
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const dismissed = () => store.get('ryogae.installDismissed');
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  if (!isStandalone() && !dismissed()) { installBtn.hidden = false; installBox.hidden = false; }
+});
+installBtn.addEventListener('click', async () => {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  await deferredPrompt.userChoice.catch(() => {});
+  deferredPrompt = null;
+  installBox.hidden = true;
+});
+window.addEventListener('appinstalled', () => { installBox.hidden = true; });
+document.getElementById('install-close').addEventListener('click', () => {
+  installBox.hidden = true;
+  store.set('ryogae.installDismissed', true);
+});
+// iOS Safari has no install prompt — show instructions instead.
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (isIOS && !isStandalone() && !dismissed()) {
+  installText.textContent = 'Tap the Share button, then “Add to Home Screen”.';
+  installBtn.hidden = true;
+  installBox.hidden = false;
+}
+
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

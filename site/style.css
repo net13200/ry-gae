@@ -72,6 +72,16 @@ h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.02em; }
   background: var(--accent); color: #fff; border: 0; border-radius: var(--radius);
   padding: 18px; font-size: 1.1rem; font-weight: 700;
 }
+.install {
+  display: flex; align-items: center; gap: 12px; margin-top: 14px;
+  background: var(--accent-soft); border-radius: var(--radius); padding: 12px 14px;
+}
+.install[hidden] { display: none; }
+.install > div { flex: 1; min-width: 0; font-size: 0.82rem; color: var(--muted); }
+.install b { display: block; color: var(--ink); font-size: 0.95rem; }
+.install-btn { border: 0; background: var(--accent); color: #fff; border-radius: 999px; padding: 10px 16px; font-weight: 700; }
+.install-btn[hidden] { display: none; }
+.install-close { border: 0; background: none; color: var(--muted); padding: 4px; }
 .foot { color: var(--muted); font-size: 0.72rem; text-align: center; margin-top: 20px; }
 
 /* Scanner */

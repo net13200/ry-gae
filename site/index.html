@@ -3,14 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>ryōgae</title>
+  <title>ryōgae 両替</title>
   <meta name="description" content="Quick currency conversion for NIS, USD, KRW and JPY — type or point your camera at a price.">
   <meta name="theme-color" content="#c2410c">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ryōgae 両替">
+  <meta name="application-name" content="ryōgae 両替">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -31,6 +35,15 @@
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1.8 2H20a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3.2L9 3Zm3 4.5a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z"/></svg>
       Point camera at a price
     </button>
+
+    <div id="install" class="install" hidden>
+      <div>
+        <b>Install ryōgae 両替</b>
+        <span id="install-text">Add it to your home screen for one-tap access, even offline.</span>
+      </div>
+      <button id="install-btn" class="install-btn" type="button">Install</button>
+      <button id="install-close" class="install-close" type="button" aria-label="Dismiss">✕</button>
+    </div>
 
     <p class="foot">Rates from open.er-api.com (ECB fallback). Works offline with last known rates.</p>
   </main>
