@@ -1,0 +1,11 @@
+{
+  "name": "ryōgae",
+  "short_name": "ryōgae",
+  "description": "Quick currency conversion for NIS, USD, KRW and JPY — type or point your camera at a price.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fbf7f2",
+  "theme_color": "#c2410c",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

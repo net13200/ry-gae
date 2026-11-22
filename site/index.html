@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ryōgae</title>
+  <meta name="description" content="Quick currency conversion for NIS, USD, KRW and JPY — type or point your camera at a price.">
+  <meta name="theme-color" content="#c2410c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <h1>ryōgae <span class="kanji" aria-hidden="true">両替</span></h1>
+      <button id="refresh" class="rates-status" type="button" aria-label="Refresh rates">
+        <span id="rates-time">Loading rates…</span>
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 4a8 8 0 0 1 7.75 6h-2.1A6 6 0 1 0 18 14h2.05A8 8 0 1 1 12 4Zm5 0h4v4h-4z"/></svg>
+      </button>
+    </header>
+
+    <section class="converter" id="converter" aria-label="Converter"></section>
+
+    <p class="hint">Tap any currency and type — the others update instantly.</p>
+
+    <button id="open-camera" class="camera-btn" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1.8 2H20a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3.2L9 3Zm3 4.5a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z"/></svg>
+      Point camera at a price
+    </button>
+
+    <p class="foot">Rates from open.er-api.com (ECB fallback). Works offline with last known rates.</p>
+  </main>
+
+  <!-- Live camera scanner -->
+  <div id="scanner" class="scanner" hidden>
+    <video id="video" playsinline muted autoplay></video>
+    <div class="shade"></div>
+    <div class="reticle" id="reticle"><span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span></div>
+    <div class="scan-top">
+      <button id="close-camera" class="icon-btn" type="button" aria-label="Close camera">✕</button>
+      <div class="src-picker" id="src-picker" role="radiogroup" aria-label="Price currency"></div>
+      <button id="torch" class="icon-btn" type="button" aria-label="Toggle flashlight" hidden>⚡</button>
+    </div>
+    <div class="scan-result" id="scan-result">
+      <div class="scan-status" id="scan-status">Starting camera…</div>
+      <div class="scan-amount" id="scan-amount"></div>
+      <div class="scan-conv" id="scan-conv"></div>
+      <div class="scan-actions">
+        <button id="freeze" class="pill" type="button">Pause</button>
+        <button id="use-value" class="pill primary" type="button" disabled>Use in converter</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
