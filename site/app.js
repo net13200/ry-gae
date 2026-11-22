@@ -251,7 +251,7 @@ async function openScanner() {
   statusEl.textContent = 'Starting camera…';
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } }, // extra pixels make digital zoom sharper
       audio: false,
     });
   } catch (e) {
@@ -363,6 +363,7 @@ function grabReticle() {
     const outW = Math.min(1000, sw);
     canvas.width = outW; canvas.height = Math.round(outW * sh / sw);
     ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    cropArea = { top: 0, bottom: canvas.height };
   } else {
     binarize(video, sx, sy, sw, sh, 500);
   }
@@ -374,6 +375,7 @@ function grabReticle() {
 function binarize(src, sx, sy, sw, sh, W) {
   const H = Math.max(1, Math.round(W * sh / sw));
   const pad = Math.round(Math.min(W, H) * 0.15) + 8;
+  cropArea = { top: pad, bottom: pad + H };
   canvas.width = W + pad * 2; canvas.height = H + pad * 2;
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -403,15 +405,30 @@ function binarize(src, sx, sy, sw, sh, W) {
   ctx.putImageData(img, pad, pad);
 }
 
-async function readText() {
+let cropArea = { top: 0, bottom: 0 }; // where the camera image sits inside the OCR canvas
+
+// Returns the text lines found in the box, with their vertical extent.
+async function readLines() {
   if (textDetector) {
     const blocks = await textDetector.detect(canvas);
-    // Prefer the tallest text (prices are usually the biggest).
-    blocks.sort((a, b) => b.boundingBox.height - a.boundingBox.height);
-    return blocks.map((b) => b.rawValue).join('\n');
+    return blocks.map((b) => ({ text: b.rawValue, y0: b.boundingBox.y, y1: b.boundingBox.y + b.boundingBox.height }));
   }
   const { data } = await ocrWorker.recognize(canvas);
-  return data.text;
+  return (data.lines || []).map((l) => ({ text: l.text, y0: l.bbox.y0, y1: l.bbox.y1 }));
+}
+
+// Pick the price from the box: prefer lines that aren't cut off by the box's top/bottom edge
+// (a half-visible neighbouring price is a common misread), then the tallest text.
+function pickPrice(lines) {
+  let best = null;
+  for (const l of lines) {
+    const p = parsePrice(l.text);
+    if (!p) continue;
+    const cut = l.y0 <= cropArea.top + 1 || l.y1 >= cropArea.bottom - 1;
+    const rank = (cut ? 0 : 1e6) + (l.y1 - l.y0) * 10 + p.score;
+    if (!best || rank > best.rank) best = { ...p, rank };
+  }
+  return best;
 }
 
 // Pull the most price-like number from OCR text.
@@ -453,9 +470,21 @@ function symbolToCode(s) {
   return null;
 }
 
+// Guess the local currency from the phone's time zone (it follows you when travelling).
+const LOCAL_CODE = (() => {
+  let tz = '';
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch {}
+  if (tz === 'Asia/Seoul') return 'KRW';
+  if (tz === 'Asia/Tokyo') return 'JPY';
+  if (tz === 'Asia/Jerusalem' || tz === 'Asia/Tel_Aviv') return 'ILS';
+  if (/^(America\/(New_York|Chicago|Denver|Los_Angeles|Phoenix|Anchorage|Juneau|Sitka|Nome|Yakutat|Metlakatla|Adak|Boise|Detroit|Menominee|Indiana\/.*|Kentucky\/.*|North_Dakota\/.*|Puerto_Rico)|Pacific\/Honolulu|US\/.*)$/.test(tz)) return 'USD';
+  if (/^(Europe\/(Amsterdam|Andorra|Athens|Berlin|Bratislava|Brussels|Busingen|Dublin|Helsinki|Lisbon|Ljubljana|Luxembourg|Madrid|Malta|Mariehamn|Monaco|Nicosia|Paris|Podgorica|Riga|Rome|San_Marino|Tallinn|Vatican|Vienna|Vilnius|Zagreb)|Atlantic\/(Azores|Madeira|Canary)|Africa\/Ceuta|Asia\/(Nicosia|Famagusta))$/.test(tz)) return 'EUR';
+  return null;
+})();
+
 function scanCode(detected) {
   if (state.scanSrc !== 'auto') return state.scanSrc;
-  return detected || state.lastScanSrc || 'JPY';
+  return detected || LOCAL_CODE || state.lastScanSrc || 'JPY';
 }
 
 function showScan(amount, detected) {
@@ -466,7 +495,9 @@ function showScan(amount, detected) {
     `<div><small>${c.flag} ${c.code}</small><b>${fmt(convert(amount, code, c.code), c.code, true)}</b></div>`).join('');
   useBtn.disabled = false;
   if (state.scanSrc === 'auto') {
-    statusEl.textContent = detected ? `Detected ${BY_CODE[detected].name}` : `Assuming ${BY_CODE[code].name} — tap a currency above to change`;
+    statusEl.textContent = detected ? `Detected ${BY_CODE[detected].name}`
+      : code === LOCAL_CODE ? `${BY_CODE[code].name} (local currency) — tap above to change`
+      : `Assuming ${BY_CODE[code].name} — tap above to change`;
   } else {
     statusEl.textContent = 'Reading live — hold steady';
   }
@@ -476,7 +507,7 @@ async function loop() {
   while (running) {
     if (!paused && grabReticle()) {
       try {
-        const found = parsePrice(await readText());
+        const found = pickPrice(await readLines());
         if (found) {
           // Vote over recent frames: OCR is noisy (e.g. ¥ misread as 4), the true price repeats.
           // Reads where the currency symbol was recognised are more trustworthy, so they count double.
@@ -492,7 +523,7 @@ async function loop() {
           for (const [v, sc] of score) if (sc > bestS) { bestS = sc; bestVal = v; }
           const curS = current ? (score.get(current.amount) || 0) : 0;
           // Hysteresis: a new value must clearly beat the one on screen.
-          const switchTo = !current ? bestS >= 3 : (bestVal !== current.amount && bestS >= 4 && bestS > curS);
+          const switchTo = !current ? bestS >= 3 : (bestVal !== current.amount && bestS >= 4 && bestS >= curS + 2);
           const det = (v) => (history.find((h) => h.value === v && h.detected) || {}).detected || null;
           if (switchTo) {
             showScan(bestVal, det(bestVal));
