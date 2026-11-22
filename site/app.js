@@ -21,7 +21,7 @@ const store = {
 };
 
 let rates = store.get(RATES_KEY) || FALLBACK;
-const state = Object.assign({ active: 'USD', amount: 100, scanSrc: 'auto', lastScanSrc: 'JPY' }, store.get(STATE_KEY) || {});
+const state = Object.assign({ active: 'USD', amount: 100, scanSrc: 'auto', lastScanSrc: 'JPY', zoom: 1 }, store.get(STATE_KEY) || {});
 const saveState = () => store.set(STATE_KEY, state);
 
 function convert(amount, from, to) {
@@ -263,6 +263,8 @@ async function openScanner() {
   if (caps.focusMode && caps.focusMode.includes('continuous')) {
     track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
   }
+  hwZoom = caps.zoom && caps.zoom.max > caps.zoom.min ? caps.zoom : null;
+  setZoom(state.zoom || 1);
   try { await initOcr(); } catch {
     statusEl.textContent = 'Could not load the text reader. Check your connection.';
     return;
@@ -279,6 +281,70 @@ function closeScanner() {
   stream = null;
   torchBtn.classList.remove('on');
 }
+
+// ---------- Zoom ----------
+// Uses the camera's optical/hardware zoom when the browser exposes it (sharper text for OCR);
+// otherwise, or beyond the hardware range, enlarges the preview. The OCR crop follows the
+// on-screen box either way, since it is computed from the transformed video rect.
+const zoomEl = document.getElementById('zoom');
+const MAX_DIGITAL = 6;
+let hwZoom = null;
+let zoomLevel = 1;
+let hwPending = null;
+
+function maxZoom() { return Math.max(MAX_DIGITAL, hwZoom ? hwZoom.max : 0); }
+
+function setZoom(z) {
+  zoomLevel = Math.min(maxZoom(), Math.max(1, z));
+  let digital = zoomLevel;
+  if (hwZoom && stream) {
+    const hw = Math.min(hwZoom.max, Math.max(hwZoom.min, zoomLevel));
+    digital = zoomLevel / hw;
+    // Coalesce rapid pinch updates into one constraint call at a time.
+    hwPending = hw;
+    if (!setZoom.busy) {
+      setZoom.busy = true;
+      (async () => {
+        while (hwPending !== null) {
+          const v = hwPending; hwPending = null;
+          try { await stream.getVideoTracks()[0].applyConstraints({ advanced: [{ zoom: v }] }); } catch {}
+        }
+        setZoom.busy = false;
+      })();
+    }
+  }
+  video.style.transform = digital > 1.001 ? `scale(${digital})` : '';
+  for (const b of zoomEl.children) b.classList.toggle('on', Math.abs(+b.dataset.z - zoomLevel) < 0.05);
+  const custom = ![1, 2, 4].some((v) => Math.abs(v - zoomLevel) < 0.05);
+  zoomEl.lastElementChild.textContent = custom && zoomLevel > 2 ? zoomLevel.toFixed(1) + '×' : '4×';
+  if (custom && zoomLevel > 2) zoomEl.lastElementChild.classList.add('on');
+  state.zoom = zoomLevel;
+  history = []; // old readings were taken at a different framing
+}
+
+zoomEl.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  setZoom(+b.dataset.z);
+  saveState();
+});
+
+// Pinch to zoom anywhere on the camera view.
+let pinch = null;
+const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+scanner.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 2) pinch = { d: dist(e.touches), z: zoomLevel };
+}, { passive: true });
+scanner.addEventListener('touchmove', (e) => {
+  if (!pinch || e.touches.length !== 2) return;
+  e.preventDefault();
+  setZoom(pinch.z * dist(e.touches) / pinch.d);
+}, { passive: false });
+scanner.addEventListener('touchend', (e) => {
+  if (pinch && e.touches.length < 2) { pinch = null; saveState(); }
+});
+// iOS Safari: stop the page itself from zooming.
+for (const ev of ['gesturestart', 'gesturechange']) scanner.addEventListener(ev, (e) => e.preventDefault());
 
 // Crop the reticle area from the video frame (accounting for object-fit: cover).
 function grabReticle() {
