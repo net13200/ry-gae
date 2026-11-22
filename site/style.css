@@ -91,13 +91,22 @@ h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.02em; }
 .zoom {
   position: absolute; left: 50%; transform: translateX(-50%);
   top: calc(32% + clamp(64px, 11%, 120px) + 16px);
-  display: flex; gap: 6px; padding: 4px; border-radius: 999px; background: rgba(0, 0, 0, 0.45);
+  width: min(78%, 340px); display: flex; align-items: center; gap: 10px;
+  padding: 6px 14px; border-radius: 999px; background: rgba(0, 0, 0, 0.45);
+  color: #fff; font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums;
 }
-.zoom button {
-  min-width: 44px; height: 36px; padding: 0 8px; border: 0; border-radius: 999px;
-  background: transparent; color: #fff; font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums;
+.zoom output { min-width: 3.2em; text-align: right; }
+.zoom input[type="range"] {
+  flex: 1; min-width: 0; height: 32px; margin: 0; background: transparent;
+  -webkit-appearance: none; appearance: none; touch-action: none;
 }
-.zoom button.on { background: #fff; color: #000; }
+.zoom input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.45); }
+.zoom input[type="range"]::-moz-range-track { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.45); }
+.zoom input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 24px; height: 24px; margin-top: -10px; border-radius: 50%;
+  background: #fff; border: 0; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.zoom input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: #fff; border: 0; }
 .reticle {
   position: absolute; left: 6%; right: 6%; top: 32%; height: clamp(64px, 11%, 120px);
   box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45); border-radius: 14px;

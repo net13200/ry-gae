@@ -287,6 +287,7 @@ function closeScanner() {
 // otherwise, or beyond the hardware range, enlarges the preview. The OCR crop follows the
 // on-screen box either way, since it is computed from the transformed video rect.
 const zoomEl = document.getElementById('zoom');
+const zoomVal = document.getElementById('zoom-val');
 const MAX_DIGITAL = 6;
 let hwZoom = null;
 let zoomLevel = 1;
@@ -314,26 +315,21 @@ function setZoom(z) {
     }
   }
   video.style.transform = digital > 1.001 ? `scale(${digital})` : '';
-  for (const b of zoomEl.children) b.classList.toggle('on', Math.abs(+b.dataset.z - zoomLevel) < 0.05);
-  const custom = ![1, 2, 4].some((v) => Math.abs(v - zoomLevel) < 0.05);
-  zoomEl.lastElementChild.textContent = custom && zoomLevel > 2 ? zoomLevel.toFixed(1) + '×' : '4×';
-  if (custom && zoomLevel > 2) zoomEl.lastElementChild.classList.add('on');
+  zoomEl.max = String(maxZoom());
+  zoomEl.value = String(zoomLevel);
+  zoomVal.textContent = zoomLevel.toFixed(1) + '×';
   state.zoom = zoomLevel;
   history = []; // old readings were taken at a different framing
 }
 
-zoomEl.addEventListener('click', (e) => {
-  const b = e.target.closest('button');
-  if (!b) return;
-  setZoom(+b.dataset.z);
-  saveState();
-});
+zoomEl.addEventListener('input', () => setZoom(+zoomEl.value));
+zoomEl.addEventListener('change', saveState);
 
 // Pinch to zoom anywhere on the camera view.
 let pinch = null;
 const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
 scanner.addEventListener('touchstart', (e) => {
-  if (e.touches.length === 2) pinch = { d: dist(e.touches), z: zoomLevel };
+  if (e.touches.length === 2 && !e.target.closest('.zoom')) pinch = { d: dist(e.touches), z: zoomLevel };
 }, { passive: true });
 scanner.addEventListener('touchmove', (e) => {
   if (!pinch || e.touches.length !== 2) return;
