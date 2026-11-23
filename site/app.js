@@ -5,13 +5,14 @@ const CURRENCIES = [
   { code: 'ILS', name: 'Israeli shekel', flag: '🇮🇱', symbol: '₪', digits: 2 },
   { code: 'USD', name: 'US dollar',      flag: '🇺🇸', symbol: '$', digits: 2 },
   { code: 'EUR', name: 'Euro',           flag: '🇪🇺', symbol: '€', digits: 2 },
+  { code: 'SGD', name: 'Singapore dollar', flag: '🇸🇬', symbol: 'S$', digits: 2 },
   { code: 'KRW', name: 'Korean won',     flag: '🇰🇷', symbol: '₩', digits: 0 },
   { code: 'JPY', name: 'Japanese yen',   flag: '🇯🇵', symbol: '¥', digits: 0 },
 ];
 const BY_CODE = Object.fromEntries(CURRENCIES.map((c) => [c.code, c]));
 
 // Rough fallback (USD base) so the app works on very first offline launch.
-const FALLBACK = { base: 'USD', rates: { USD: 1, ILS: 3.7, EUR: 0.92, KRW: 1400, JPY: 150 }, time: 0, source: 'built-in estimate' };
+const FALLBACK = { base: 'USD', rates: { USD: 1, ILS: 3.7, EUR: 0.92, SGD: 1.3, KRW: 1400, JPY: 150 }, time: 0, source: 'built-in estimate' };
 const RATES_KEY = 'ryogae.rates';
 const STATE_KEY = 'ryogae.state';
 const STALE_MS = 6 * 60 * 60 * 1000;
@@ -24,7 +25,23 @@ const store = {
 let rates = store.get(RATES_KEY) || FALLBACK;
 // Saved rates from an older version may lack a newly added currency.
 if (!CURRENCIES.every((c) => rates.rates && rates.rates[c.code])) rates = FALLBACK;
-const state = Object.assign({ active: 'USD', amount: 100, scanSrc: 'auto', lastScanSrc: 'JPY', zoom: 1 }, store.get(STATE_KEY) || {});
+// First guess at the user's home currency from the phone's language/region settings.
+function guessHome() {
+  const euro = /^(AT|BE|CY|DE|EE|ES|FI|FR|GR|HR|IE|IT|LT|LU|LV|MT|NL|PT|SI|SK)$/;
+  for (const l of navigator.languages || [navigator.language || '']) {
+    const [lang, region = ''] = l.split('-');
+    const r = region.toUpperCase();
+    if (lang === 'he' || lang === 'iw' || r === 'IL') return 'ILS';
+    if (lang === 'ko' || r === 'KR') return 'KRW';
+    if (lang === 'ja' || r === 'JP') return 'JPY';
+    if (r === 'SG') return 'SGD';
+    if (euro.test(r)) return 'EUR';
+    if (r === 'US') return 'USD';
+  }
+  return 'USD';
+}
+const state = Object.assign({ active: 'USD', amount: 100, scanSrc: 'auto', lastScanSrc: 'JPY', zoom: 1, home: null }, store.get(STATE_KEY) || {});
+if (!state.home || !CURRENCIES.some((c) => c.code === state.home)) state.home = guessHome();
 const saveState = () => store.set(STATE_KEY, state);
 
 function convert(amount, from, to) {
@@ -60,7 +77,7 @@ async function fetchRates() {
       return { base: 'USD', rates: pick(j.rates), time: j.time_last_update_unix * 1000, source: 'open.er-api.com' };
     },
     async () => {
-      const r = await fetch('https://api.frankfurter.app/latest?from=USD&to=ILS,EUR,KRW,JPY', { cache: 'no-store' });
+      const r = await fetch('https://api.frankfurter.app/latest?from=USD&to=ILS,EUR,SGD,KRW,JPY', { cache: 'no-store' });
       const j = await r.json();
       return { base: 'USD', rates: pick({ USD: 1, ...j.rates }), time: Date.parse(j.date), source: 'ECB (frankfurter.app)' };
     },
@@ -151,6 +168,19 @@ for (const c of CURRENCIES) {
   rateLabels[c.code] = row.querySelector('.rate');
 }
 
+const homeSel = document.getElementById('home');
+for (const c of CURRENCIES) homeSel.add(new Option(`${c.flag} ${c.code} — ${c.name}`, c.code));
+function applyHome() {
+  homeSel.value = state.home;
+  // Home currency row goes first, the rest keep their order.
+  for (const c of [...CURRENCIES].sort((a, b) => (b.code === state.home) - (a.code === state.home))) {
+    const row = inputs[c.code].closest('.row');
+    row.classList.toggle('home', c.code === state.home);
+    conv.appendChild(row);
+  }
+}
+homeSel.addEventListener('change', () => { state.home = homeSel.value; saveState(); applyHome(); if (current) showScan(current.amount, current.detected); });
+
 function markActive() {
   for (const row of conv.children) row.classList.toggle('active', row.dataset.code === state.active);
 }
@@ -173,6 +203,7 @@ const reticle = document.getElementById('reticle');
 const statusEl = document.getElementById('scan-status');
 const amountEl = document.getElementById('scan-amount');
 const convEl = document.getElementById('scan-conv');
+const homeEl = document.getElementById('scan-home');
 const freezeBtn = document.getElementById('freeze');
 const useBtn = document.getElementById('use-value');
 const torchBtn = document.getElementById('torch');
@@ -267,7 +298,7 @@ async function openScanner() {
   scanner.hidden = false;
   updatePicker();
   current = null; history = [];
-  amountEl.textContent = ''; convEl.innerHTML = ''; useBtn.disabled = true;
+  amountEl.textContent = ''; convEl.innerHTML = ''; homeEl.hidden = true; useBtn.disabled = true;
   paused = false; unfreeze();
   statusEl.textContent = 'Starting camera…';
   try {
@@ -472,7 +503,7 @@ function pickPrice(lines) {
 // Pull the most price-like number from OCR text.
 function parsePrice(text) {
   const t = text.replace(/(?<=\d)[Oo]|[Oo](?=\d)/g, '0');
-  const re = /([$€¥₩₪]|円|원|NIS|USD|EUR|JPY|KRW|ILS)?\s*(\d[\d,.\s]*\d|\d)\s*(円|원|₪|€|NIS|USD|EUR|JPY|KRW|ILS|yen|won|euros?)?/gi;
+  const re = /(S\$|[$€¥₩₪]|円|원|NIS|USD|EUR|SGD|JPY|KRW|ILS)?\s*(\d[\d,.\s]*\d|\d)\s*(円|원|₪|€|NIS|USD|EUR|SGD|JPY|KRW|ILS|yen|won|euros?)?/gi;
   let best = null;
   let m;
   while ((m = re.exec(t))) {
@@ -502,7 +533,9 @@ function normalizeNumber(raw) {
 
 function symbolToCode(s) {
   s = s.toLowerCase();
-  if (s === '$' || s === 'usd') return 'USD';
+  if (s === 's$' || s === 'sgd') return 'SGD';
+  if (s === '$') return LOCAL_CODE === 'SGD' ? 'SGD' : 'USD'; // a plain $ in Singapore is S$
+  if (s === 'usd') return 'USD';
   if (s === '€' || s === 'eur' || s === 'euro' || s === 'euros') return 'EUR';
   if (s === '¥' || s === '円' || s === 'jpy' || s === 'yen') return 'JPY';
   if (s === '₩' || s === '원' || s === 'krw' || s === 'won') return 'KRW';
@@ -516,6 +549,7 @@ const LOCAL_CODE = (() => {
   try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch {}
   if (tz === 'Asia/Seoul') return 'KRW';
   if (tz === 'Asia/Tokyo') return 'JPY';
+  if (tz === 'Asia/Singapore') return 'SGD';
   if (tz === 'Asia/Jerusalem' || tz === 'Asia/Tel_Aviv') return 'ILS';
   if (/^(America\/(New_York|Chicago|Denver|Los_Angeles|Phoenix|Anchorage|Juneau|Sitka|Nome|Yakutat|Metlakatla|Adak|Boise|Detroit|Menominee|Indiana\/.*|Kentucky\/.*|North_Dakota\/.*|Puerto_Rico)|Pacific\/Honolulu|US\/.*)$/.test(tz)) return 'USD';
   if (/^(Europe\/(Amsterdam|Andorra|Athens|Berlin|Bratislava|Brussels|Busingen|Dublin|Helsinki|Lisbon|Ljubljana|Luxembourg|Madrid|Malta|Mariehamn|Monaco|Nicosia|Paris|Podgorica|Riga|Rome|San_Marino|Tallinn|Vatican|Vienna|Vilnius|Zagreb)|Atlantic\/(Azores|Madeira|Canary)|Africa\/Ceuta|Asia\/(Nicosia|Famagusta))$/.test(tz)) return 'EUR';
@@ -531,7 +565,10 @@ function showScan(amount, detected, raw) {
   const code = scanCode(detected);
   current = { amount, detected, code };
   amountEl.textContent = fmt(amount, code, true) + ' ' + code;
-  convEl.innerHTML = CURRENCIES.filter((c) => c.code !== code).map((c) =>
+  const home = BY_CODE[state.home];
+  homeEl.hidden = code === home.code;
+  homeEl.innerHTML = `<small>${home.flag} ${home.code} · home</small><b>≈ ${fmt(convert(amount, code, home.code), home.code, true)}</b>`;
+  convEl.innerHTML = CURRENCIES.filter((c) => c.code !== code && c.code !== home.code).map((c) =>
     `<div><small>${c.flag} ${c.code}</small><b>${fmt(convert(amount, code, c.code), c.code, true)}</b></div>`).join('');
   useBtn.disabled = false;
   if (raw !== undefined && raw < 100 && amount >= 1000) {
@@ -603,6 +640,7 @@ torchBtn.addEventListener('click', async () => {
 document.addEventListener('visibilitychange', () => { if (document.hidden && running) closeScanner(); });
 
 // ---------- Boot ----------
+applyHome();
 render();
 showRatesTime();
 updateRates();
@@ -623,7 +661,7 @@ function unfreeze() {
   still.hidden = true; marksEl.hidden = true; marksEl.innerHTML = ''; progressEl.hidden = true;
   freezeBtn.textContent = 'Freeze & find prices';
   current = null; history = [];
-  amountEl.textContent = ''; convEl.innerHTML = ''; useBtn.disabled = true;
+  amountEl.textContent = ''; convEl.innerHTML = ''; homeEl.hidden = true; useBtn.disabled = true;
   if (running) statusEl.textContent = 'Fit just the price inside the box';
 }
 
@@ -649,7 +687,7 @@ async function freeze() {
   scanner.classList.add('frozen');
   freezeBtn.textContent = 'Back to live';
   current = null; selectedMark = null;
-  amountEl.textContent = ''; convEl.innerHTML = ''; useBtn.disabled = true;
+  amountEl.textContent = ''; convEl.innerHTML = ''; homeEl.hidden = true; useBtn.disabled = true;
   statusEl.textContent = 'Finding prices…';
   progressEl.hidden = false; setProgress(0.05);
 
@@ -786,7 +824,7 @@ function selectMark(b) {
   const value = fixForCurrency(b.price.value, code);
   showScan(value, b.price.detected, b.price.value);
   // Label the tapped price with its conversion into the "home" currency of the converter.
-  const home = state.active !== code ? state.active : CURRENCIES.find((c) => c.code !== code).code;
+  const home = state.home !== code ? state.home : CURRENCIES.find((c) => c.code !== code).code;
   b.firstElementChild.textContent = '≈ ' + fmt(convert(value, code, home), home, true);
 }
 

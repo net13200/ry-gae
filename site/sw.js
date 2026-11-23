@@ -1,5 +1,5 @@
 // Bump on every release so old caches are cleared.
-const CACHE = 'ryogae-v10';
+const CACHE = 'ryogae-v11';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon.svg',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 const NETWORK_TIMEOUT_MS = 3000;

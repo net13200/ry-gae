@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>ryōgae 両替</title>
-  <meta name="description" content="Quick currency conversion for NIS, USD, EUR, KRW and JPY — type or point your camera at a price.">
+  <meta name="description" content="Quick currency conversion for NIS, USD, EUR, SGD, KRW and JPY — type or point your camera at a price.">
   <meta name="theme-color" content="#c2410c">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -26,6 +26,11 @@
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 4a8 8 0 0 1 7.75 6h-2.1A6 6 0 1 0 18 14h2.05A8 8 0 1 1 12 4Zm5 0h4v4h-4z"/></svg>
       </button>
     </header>
+
+    <label class="home-pick">
+      <span>Home currency</span>
+      <select id="home" aria-label="Home currency"></select>
+    </label>
 
     <section class="converter" id="converter" aria-label="Converter"></section>
 
@@ -70,6 +75,7 @@
       <div class="scan-status" id="scan-status">Starting camera…</div>
       <div class="scan-progress" id="scan-progress" hidden><i></i></div>
       <div class="scan-amount" id="scan-amount"></div>
+      <div class="scan-home" id="scan-home" hidden></div>
       <div class="scan-conv" id="scan-conv"></div>
       <div class="scan-actions">
         <button id="freeze" class="pill" type="button">Freeze &amp; find prices</button>
