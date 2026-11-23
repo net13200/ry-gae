@@ -233,7 +233,7 @@ async function initOcr() {
       await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
       const w = await Tesseract.createWorker('eng', 1);
       await w.setParameters({
-        tessedit_char_whitelist: '0123456789.,$€¥₩₪',
+        tessedit_char_whitelist: '0123456789.,+$€¥₩₪', // '+' so "+300" isn't read as "4300"
         tessedit_pageseg_mode: '6', // uniform block — copes with a stray partial line
       });
       ocrWorker = w;
@@ -424,6 +424,11 @@ function pickPrice(lines) {
   for (const l of lines) {
     const p = parsePrice(l.text);
     if (!p) continue;
+    // Won prices are always multiples of 10 (no smaller coins). A stray last digit like the 8 in
+    // "3008" is almost always a misread 원 — drop it.
+    if (scanCode(p.detected) === 'KRW' && Number.isInteger(p.value) && p.value >= 100 && p.value % 10 !== 0) {
+      p.value = Math.floor(p.value / 10);
+    }
     const cut = l.y0 <= cropArea.top + 1 || l.y1 >= cropArea.bottom - 1;
     const rank = (cut ? 0 : 1e6) + (l.y1 - l.y0) * 10 + p.score;
     if (!best || rank > best.rank) best = { ...p, rank };
@@ -451,6 +456,8 @@ function parsePrice(text) {
 }
 
 function normalizeNumber(raw) {
+  // "1,2008": a final digit group of 4 after 3-digit groups means a suffix like 원/円 was misread as a digit.
+  if (/^\d{1,3}([,.]\d{3})*[,.]\d{4}$/.test(raw)) raw = raw.slice(0, -1);
   const lastSep = Math.max(raw.lastIndexOf('.'), raw.lastIndexOf(','));
   if (lastSep === -1) return parseFloat(raw);
   const after = raw.length - lastSep - 1;
