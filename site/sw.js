@@ -1,8 +1,11 @@
 // Bump on every release so old caches are cleared.
-const CACHE = 'ryogae-v9';
+const CACHE = 'ryogae-v10';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon.svg',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 const NETWORK_TIMEOUT_MS = 3000;
+// Separate cache for the text reader so app updates don't throw away (and re-download) ~4 MB.
+// Change the name only when the files in vendor/tesseract change.
+const VENDOR_CACHE = 'ryogae-tesseract-5.1.1';
 
 self.addEventListener('install', (e) => {
   // cache: 'reload' bypasses the browser's HTTP cache so we never store a stale copy.
@@ -13,7 +16,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== VENDOR_CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -23,9 +26,9 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // Versioned CDN files (OCR library) never change: cache first.
-  if (url.hostname.endsWith('jsdelivr.net')) {
-    e.respondWith(caches.open(CACHE).then(async (cache) => {
+  // Text reader files (~4 MB) never change between releases: cache first, kept for offline use.
+  if (url.origin === location.origin && url.pathname.includes('/vendor/')) {
+    e.respondWith(caches.open(VENDOR_CACHE).then(async (cache) => {
       const hit = await cache.match(req);
       if (hit) return hit;
       const res = await fetch(req);

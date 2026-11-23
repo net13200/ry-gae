@@ -182,6 +182,25 @@ let stream = null;
 let running = false;
 let paused = false;
 let ocrWorker = null;
+let ocrMode = null;               // which parameter set the worker currently has
+let ocrQueue = Promise.resolve(); // one recognition at a time (live loop vs frozen-frame analysis)
+const OCR_MODES = {
+  // '+' so "+300" isn't read as "4300"; block mode copes with a stray partial line.
+  live: { tessedit_char_whitelist: '0123456789.,+$€¥₩₪', tessedit_pageseg_mode: '6' },
+  // Find every bit of text in a whole frame (letters allowed so foreign text isn't forced into digits).
+  scan: { tessedit_char_whitelist: '', tessedit_pageseg_mode: '11' },
+  // Re-read one candidate price as a single line.
+  word: { tessedit_char_whitelist: '0123456789.,+$€¥₩₪', tessedit_pageseg_mode: '7' },
+};
+function withOcr(fn) {
+  const run = ocrQueue.then(fn, fn);
+  ocrQueue = run.catch(() => {});
+  return run;
+}
+async function recognize(cv, mode) {
+  if (ocrMode !== mode) { await ocrWorker.setParameters(OCR_MODES[mode]); ocrMode = mode; }
+  return (await ocrWorker.recognize(cv)).data;
+}
 let ocrLoading = null;
 let textDetector = null;
 let current = null;          // { amount, code }
@@ -201,7 +220,8 @@ for (const code of ['auto', ...CURRENCIES.map((c) => c.code)]) {
     if (code !== 'auto') state.lastScanSrc = code;
     saveState();
     updatePicker();
-    if (current) showScan(current.amount, current.detected);
+    if (frozen && selectedMark) selectMark(selectedMark);
+    else if (current) showScan(current.amount, current.detected);
   });
   picker.appendChild(b);
 }
@@ -230,13 +250,14 @@ async function initOcr() {
   if (!ocrLoading) {
     ocrLoading = (async () => {
       statusEl.textContent = 'Loading text reader (first time only)…';
-      await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
-      const w = await Tesseract.createWorker('eng', 1);
-      await w.setParameters({
-        tessedit_char_whitelist: '0123456789.,+$€¥₩₪', // '+' so "+300" isn't read as "4300"
-        tessedit_pageseg_mode: '6', // uniform block — copes with a stray partial line
+      // Served from this site (not a CDN) so the service worker can keep it for offline use.
+      await loadScript('vendor/tesseract/tesseract.min.js');
+      const base = new URL('vendor/tesseract/', location.href).href;
+      ocrWorker = await Tesseract.createWorker('eng', 1, {
+        workerPath: base + 'worker.min.js', corePath: base, langPath: base.replace(/\/$/, ''),
+        workerBlobURL: false, gzip: true,
       });
-      ocrWorker = w;
+      ocrMode = null;
     })();
   }
   await ocrLoading;
@@ -247,7 +268,7 @@ async function openScanner() {
   updatePicker();
   current = null; history = [];
   amountEl.textContent = ''; convEl.innerHTML = ''; useBtn.disabled = true;
-  paused = false; freezeBtn.textContent = 'Pause';
+  paused = false; unfreeze();
   statusEl.textContent = 'Starting camera…';
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -278,6 +299,7 @@ async function openScanner() {
 }
 
 function closeScanner() {
+  unfreeze();
   running = false;
   scanner.hidden = true;
   if (stream) stream.getTracks().forEach((t) => t.stop());
@@ -335,7 +357,7 @@ scanner.addEventListener('touchstart', (e) => {
   if (e.touches.length === 2 && !e.target.closest('.zoom')) pinch = { d: dist(e.touches), z: zoomLevel };
 }, { passive: true });
 scanner.addEventListener('touchmove', (e) => {
-  if (!pinch || e.touches.length !== 2) return;
+  if (!pinch || e.touches.length !== 2 || frozen) return;
   e.preventDefault();
   setZoom(pinch.z * dist(e.touches) / pinch.d);
 }, { passive: false });
@@ -373,12 +395,17 @@ function grabReticle() {
 // Prepare a frame for Tesseract: scale to a fixed width, adaptive (Bradley) threshold
 // so uneven lighting / shadows on paper don't wash out digits, then add a white margin.
 function binarize(src, sx, sy, sw, sh, W) {
+  const { pad, H } = binarizeInto(canvas, src, sx, sy, sw, sh, W);
+  cropArea = { top: pad, bottom: pad + H };
+}
+
+function binarizeInto(cv, src, sx, sy, sw, sh, W) {
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
   const H = Math.max(1, Math.round(W * sh / sw));
   const pad = Math.round(Math.min(W, H) * 0.15) + 8;
-  cropArea = { top: pad, bottom: pad + H };
-  canvas.width = W + pad * 2; canvas.height = H + pad * 2;
+  cv.width = W + pad * 2; cv.height = H + pad * 2;
   ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.drawImage(src, sx, sy, sw, sh, pad, pad, W, H);
   const img = ctx.getImageData(pad, pad, W, H), px = img.data, n = W * H;
   const g = new Uint8Array(n);
@@ -403,6 +430,7 @@ function binarize(src, sx, sy, sw, sh, W) {
   const invert = dark > n / 2; // light text on a dark background
   for (let i = 0; i < n; i++) px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = (on[i] ^ invert) ? 0 : 255;
   ctx.putImageData(img, pad, pad);
+  return { pad, H };
 }
 
 let cropArea = { top: 0, bottom: 0 }; // where the camera image sits inside the OCR canvas
@@ -413,8 +441,17 @@ async function readLines() {
     const blocks = await textDetector.detect(canvas);
     return blocks.map((b) => ({ text: b.rawValue, y0: b.boundingBox.y, y1: b.boundingBox.y + b.boundingBox.height }));
   }
-  const { data } = await ocrWorker.recognize(canvas);
+  const data = await recognize(canvas, 'live');
   return (data.lines || []).map((l) => ({ text: l.text, y0: l.bbox.y0, y1: l.bbox.y1 }));
+}
+
+// Won prices are always multiples of 10 (no smaller coins). A stray last digit like the 8 in
+// "3008" is almost always a misread 원 — drop it.
+function fixForCurrency(value, code) {
+  if (code === 'KRW' && Number.isInteger(value) && value >= 100 && value % 10 !== 0) return Math.floor(value / 10);
+  // Korean menus often list prices in thousands ("5.9" = ₩5,900); nothing costs under ₩100.
+  if (code === 'KRW' && value < 100) return Math.round(value * 1000);
+  return value;
 }
 
 // Pick the price from the box: prefer lines that aren't cut off by the box's top/bottom edge
@@ -424,11 +461,7 @@ function pickPrice(lines) {
   for (const l of lines) {
     const p = parsePrice(l.text);
     if (!p) continue;
-    // Won prices are always multiples of 10 (no smaller coins). A stray last digit like the 8 in
-    // "3008" is almost always a misread 원 — drop it.
-    if (scanCode(p.detected) === 'KRW' && Number.isInteger(p.value) && p.value >= 100 && p.value % 10 !== 0) {
-      p.value = Math.floor(p.value / 10);
-    }
+    p.value = fixForCurrency(p.value, scanCode(p.detected));
     const cut = l.y0 <= cropArea.top + 1 || l.y1 >= cropArea.bottom - 1;
     const rank = (cut ? 0 : 1e6) + (l.y1 - l.y0) * 10 + p.score;
     if (!best || rank > best.rank) best = { ...p, rank };
@@ -450,7 +483,7 @@ function parsePrice(text) {
     const detected = symbolToCode(m[1] || m[3] || '');
     if (digits < 2 && !detected) continue; // stray "3", "7"… are almost always noise
     const score = digits + (detected ? 3 : 0);
-    if (!best || score > best.score) best = { value, detected, score };
+    if (!best || score > best.score) best = { value, detected, score, raw };
   }
   return best;
 }
@@ -494,14 +527,16 @@ function scanCode(detected) {
   return detected || LOCAL_CODE || state.lastScanSrc || 'JPY';
 }
 
-function showScan(amount, detected) {
+function showScan(amount, detected, raw) {
   const code = scanCode(detected);
   current = { amount, detected, code };
   amountEl.textContent = fmt(amount, code, true) + ' ' + code;
   convEl.innerHTML = CURRENCIES.filter((c) => c.code !== code).map((c) =>
     `<div><small>${c.flag} ${c.code}</small><b>${fmt(convert(amount, code, c.code), c.code, true)}</b></div>`).join('');
   useBtn.disabled = false;
-  if (state.scanSrc === 'auto') {
+  if (raw !== undefined && raw < 100 && amount >= 1000) {
+    statusEl.textContent = `Read “${raw}” — Korean menus list prices in thousands, so ₩${fmt(amount, 'KRW')}`;
+  } else if (state.scanSrc === 'auto') {
     statusEl.textContent = detected ? `Detected ${BY_CODE[detected].name}`
       : code === LOCAL_CODE ? `${BY_CODE[code].name} (local currency) — tap above to change`
       : `Assuming ${BY_CODE[code].name} — tap above to change`;
@@ -514,7 +549,7 @@ async function loop() {
   while (running) {
     if (!paused && grabReticle()) {
       try {
-        const found = pickPrice(await readLines());
+        const found = pickPrice(await withOcr(readLines));
         if (found) {
           // Vote over recent frames: OCR is noisy (e.g. ¥ misread as 4), the true price repeats.
           // Reads where the currency symbol was recognised are more trustworthy, so they count double.
@@ -550,11 +585,7 @@ async function loop() {
 
 document.getElementById('open-camera').addEventListener('click', openScanner);
 document.getElementById('close-camera').addEventListener('click', closeScanner);
-freezeBtn.addEventListener('click', () => {
-  paused = !paused;
-  freezeBtn.textContent = paused ? 'Resume' : 'Pause';
-  if (paused) video.pause(); else video.play();
-});
+freezeBtn.addEventListener('click', () => { if (frozen) { unfreeze(); video.play().catch(() => {}); } else freeze(); });
 useBtn.addEventListener('click', () => {
   if (!current) return;
   state.active = current.code;
@@ -575,6 +606,189 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && run
 render();
 showRatesTime();
 updateRates();
+
+// ---------- Freeze frame: find every price in a still ----------
+// The frame lives only in memory (a canvas); nothing is saved or uploaded. All reading is on-device.
+const still = document.getElementById('still');
+const marksEl = document.getElementById('marks');
+const progressEl = document.getElementById('scan-progress');
+const resultEl = document.getElementById('scan-result');
+let frozen = false;
+let freezeId = 0;
+let selectedMark = null;
+
+function unfreeze() {
+  frozen = false; freezeId++; paused = false; selectedMark = null;
+  scanner.classList.remove('frozen');
+  still.hidden = true; marksEl.hidden = true; marksEl.innerHTML = ''; progressEl.hidden = true;
+  freezeBtn.textContent = 'Freeze & find prices';
+  current = null; history = [];
+  amountEl.textContent = ''; convEl.innerHTML = ''; useBtn.disabled = true;
+  if (running) statusEl.textContent = 'Fit just the price inside the box';
+}
+
+async function freeze() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !ocrWorker && !textDetector) return;
+  frozen = true; paused = true;
+  const id = ++freezeId;
+  // Capture what's on screen above the bottom panel (prices under the panel couldn't be tapped anyway).
+  const vr = video.getBoundingClientRect();
+  const sr = scanner.getBoundingClientRect();
+  const visH = resultEl.getBoundingClientRect().top - sr.top;
+  const scale = Math.max(vr.width / vw, vr.height / vh);
+  const offX = (vr.width - vw * scale) / 2, offY = (vr.height - vh * scale) / 2;
+  const sx = (sr.left - vr.left - offX) / scale, sy = (sr.top - vr.top - offY) / scale;
+  const sw = sr.width / scale, sh = visH / scale;
+  const k = Math.min(1, 2000 / Math.max(sw, sh)); // enough detail, bounded work
+  still.width = Math.round(sw * k); still.height = Math.round(sh * k);
+  still.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, still.width, still.height);
+  video.pause();
+  still.style.height = marksEl.style.height = visH + 'px';
+  still.hidden = false; marksEl.hidden = false; marksEl.innerHTML = '';
+  scanner.classList.add('frozen');
+  freezeBtn.textContent = 'Back to live';
+  current = null; selectedMark = null;
+  amountEl.textContent = ''; convEl.innerHTML = ''; useBtn.disabled = true;
+  statusEl.textContent = 'Finding prices…';
+  progressEl.hidden = false; setProgress(0.05);
+
+  let n = 0;
+  const found = await withOcr(() => findPrices(still, (p) => {
+    if (id !== freezeId) return;
+    n++;
+    addMark(p);
+    statusEl.textContent = `Finding prices… ${n} found — tap one to convert`;
+  }, (f) => id === freezeId && setProgress(f), () => id !== freezeId)).catch((e) => { console.warn(e); return []; });
+  if (id !== freezeId) return;
+  progressEl.hidden = true;
+  if (!selectedMark) {
+    statusEl.textContent = found.length
+      ? `${found.length} price${found.length > 1 ? 's' : ''} found — tap one to convert`
+      : 'No prices found. Move closer or zoom in, then freeze again.';
+  }
+}
+
+function setProgress(f) { progressEl.firstElementChild.style.width = Math.round(f * 100) + '%'; }
+
+// Two passes: (1) sparse-text scan of the whole frame to locate anything containing digits,
+// (2) re-read each spot at a good size with digit-only settings, keeping clean price readings.
+async function findPrices(img, onFound, onProgress, cancelled) {
+  const results = [];
+  const accept = (value, detected, box, why) => {
+    // Skip duplicates (same spot read twice).
+    if (results.some((r) => Math.abs(r.box.x - box.x) < box.h && Math.abs(r.box.y - box.y) < box.h / 2)) return;
+    const r = { value, detected, box, why };
+    results.push(r); onFound(r);
+  };
+  if (textDetector) {
+    const blocks = await textDetector.detect(img);
+    for (const b of blocks) {
+      const p = parsePrice(b.rawValue);
+      if (p) accept(p.value, p.detected, { x: b.boundingBox.x, y: b.boundingBox.y, w: b.boundingBox.width, h: b.boundingBox.height });
+    }
+    return results;
+  }
+  const W = Math.min(1200, img.width);
+  const pass = document.createElement('canvas');
+  const { pad } = binarizeInto(pass, img, 0, 0, img.width, img.height, W);
+  const f = img.width / W;
+  const data = await recognize(pass, 'scan');
+  if (cancelled()) return results;
+  const words = (data.words || []).map((w) => ({ text: w.text.trim(), x: (w.bbox.x0 - pad) * f, y: (w.bbox.y0 - pad) * f, w: (w.bbox.x1 - w.bbox.x0) * f, h: (w.bbox.y1 - w.bbox.y0) * f }))
+    .filter((w) => w.text && w.h > 6 && w.w > 2);
+  const cands = groupWords(words).filter((g) => /\d/.test(g.text));
+  onProgress(0.3);
+  const crop = document.createElement('canvas');
+  for (let i = 0; i < cands.length; i++) {
+    if (cancelled()) return results;
+    const c = cands[i];
+    const mx = c.h * 0.6, my = c.h * 0.35;
+    const sx = Math.max(0, c.x - mx), sy = Math.max(0, c.y - my);
+    const sw = Math.min(img.width - sx, c.w + mx * 2), sh = Math.min(img.height - sy, c.h + my * 2);
+    binarizeInto(crop, img, sx, sy, sw, sh, Math.min(900, Math.max(60, Math.round(sw / sh * 64))));
+    const d = await recognize(crop, 'word');
+    const text = d.text.trim();
+    if (window.DEBUG_OCR) console.log('cand', JSON.stringify(c.text), '→', JSON.stringify(text), Math.round(d.confidence));
+    const p = parsePrice(text);
+    if (p) {
+      // Keep it if both reads agree on the digits (one contains the other — either read may include a
+      // misread 원/円 or a neighbouring digit), or the focused re-read is clean and very confident.
+      const d1 = c.text.replace(/\D/g, ''), d2 = String(p.raw).replace(/\D/g, '');
+      const agree = digitsAgree(d1, d2);
+      const clean = /^\+?\s*[$€¥₩₪]?\s*\d[\d,.\s]*[$€¥₩₪]?$/.test(text);
+      if (agree || (clean && d.confidence >= 80)) accept(p.value, p.detected, { x: c.x, y: c.y, w: c.w, h: c.h }, `${c.text}→${text}(${Math.round(d.confidence)})`);
+    }
+    onProgress(0.3 + 0.7 * (i + 1) / cands.length);
+  }
+  return results;
+}
+
+// Two OCR reads of the same spot agree if one is the other with characters dropped ("160" vs "1670",
+// a digit misread as "/"), or they share a run of 3+ digits ("3500" vs "5004").
+function digitsAgree(a, b) {
+  const [s, l] = a.length <= b.length ? [a, b] : [b, a];
+  if (s.length < 2) return false;
+  let i = 0;
+  for (const ch of l) if (ch === s[i]) i++;
+  if (i === s.length) return true;
+  for (let k = 0; k + 3 <= s.length; k++) if (l.includes(s.slice(k, k + 3))) return true;
+  return false;
+}
+
+// Join words on the same line that sit close together ("¥1," + "670" on a widely spaced receipt).
+function groupWords(words) {
+  words = words.slice().sort((a, b) => a.x - b.x);
+  const groups = [];
+  for (const w of words) {
+    const g = groups.find((g) => {
+      const last = g.last;
+      const overlap = Math.min(last.y + last.h, w.y + w.h) - Math.max(last.y, w.y);
+      const hRatio = Math.max(last.h, w.h) / Math.min(last.h, w.h);
+      const gap = w.x - (last.x + last.w);
+      const shortOrNumeric = (t) => t.length <= 3 || /\d/.test(t);
+      return overlap > 0.5 * Math.min(last.h, w.h) && hRatio < 1.6 && gap < 0.9 * Math.max(last.h, w.h) && gap > -last.h &&
+        shortOrNumeric(last.text) && shortOrNumeric(w.text);
+    });
+    if (g) {
+      const x1 = Math.max(g.x + g.w, w.x + w.w), y1 = Math.max(g.y + g.h, w.y + w.h);
+      g.x = Math.min(g.x, w.x); g.y = Math.min(g.y, w.y); g.w = x1 - g.x; g.h = y1 - g.y;
+      g.text += w.text; g.last = w;
+    } else groups.push({ ...w, last: w });
+  }
+  return groups;
+}
+
+function addMark(p) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'mark';
+  const sx = 100 / still.width, sy = 100 / still.height;
+  b.style.left = `calc(${(p.box.x * sx).toFixed(2)}% - 6px)`;
+  b.style.top = `calc(${(p.box.y * sy).toFixed(2)}% - 6px)`;
+  b.style.width = `calc(${(p.box.w * sx).toFixed(2)}% + 12px)`;
+  b.style.height = `calc(${(p.box.h * sy).toFixed(2)}% + 12px)`;
+  b.setAttribute('aria-label', 'Price ' + p.value);
+  b.price = p;
+  b.innerHTML = '<span></span>';
+  b.addEventListener('click', () => selectMark(b));
+  marksEl.appendChild(b);
+}
+
+function selectMark(b) {
+  if (selectedMark && selectedMark !== b) {
+    selectedMark.classList.remove('sel');
+    selectedMark.firstElementChild.textContent = '';
+  }
+  selectedMark = b;
+  b.classList.add('sel');
+  const code = scanCode(b.price.detected);
+  const value = fixForCurrency(b.price.value, code);
+  showScan(value, b.price.detected, b.price.value);
+  // Label the tapped price with its conversion into the "home" currency of the converter.
+  const home = state.active !== code ? state.active : CURRENCIES.find((c) => c.code !== code).code;
+  b.firstElementChild.textContent = '≈ ' + fmt(convert(value, code, home), home, true);
+}
 
 // ---------- Install ----------
 const installBox = document.getElementById('install');

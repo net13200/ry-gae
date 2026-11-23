@@ -51,6 +51,8 @@
   <!-- Live camera scanner -->
   <div id="scanner" class="scanner" hidden>
     <video id="video" playsinline muted autoplay></video>
+    <canvas id="still" class="still" hidden></canvas>
+    <div id="marks" class="marks" hidden></div>
     <div class="shade"></div>
     <div class="reticle" id="reticle"><span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span></div>
     <div class="zoom">
@@ -66,10 +68,11 @@
     <div class="scan-result" id="scan-result">
       <div class="src-picker" id="src-picker" role="radiogroup" aria-label="Price currency"></div>
       <div class="scan-status" id="scan-status">Starting camera…</div>
+      <div class="scan-progress" id="scan-progress" hidden><i></i></div>
       <div class="scan-amount" id="scan-amount"></div>
       <div class="scan-conv" id="scan-conv"></div>
       <div class="scan-actions">
-        <button id="freeze" class="pill" type="button">Pause</button>
+        <button id="freeze" class="pill" type="button">Freeze &amp; find prices</button>
         <button id="use-value" class="pill primary" type="button" disabled>Use in converter</button>
       </div>
     </div>
