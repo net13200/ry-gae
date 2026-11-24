@@ -188,3 +188,25 @@ h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.02em; }
 .scan-progress { height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; margin: 6px 0 0; }
 .scan-progress[hidden] { display: none; }
 .scan-progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+
+/* Bookmarklet page */
+.page h2 { font-size: 1.3rem; margin: 4px 0 6px; }
+.page h3 { font-size: 1.05rem; margin: 26px 0 10px; }
+.page .lead { color: var(--muted); font-size: 0.92rem; line-height: 1.45; margin: 0 0 16px; }
+.page .note { color: var(--muted); font-size: 0.8rem; line-height: 1.45; margin: 8px 0; }
+.back { color: var(--accent); text-decoration: none; margin-right: 2px; }
+.bm-box { display: flex; gap: 10px; align-items: center; margin: 14px 0 16px; }
+.bm-link {
+  flex: none; display: inline-block; background: var(--accent); color: #fff; text-decoration: none; font-weight: 700;
+  padding: 12px 18px; border-radius: 999px; cursor: grab;
+}
+.bm-box .pill { flex: 1; }
+.howto { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; margin: 8px 0; font-size: 0.88rem; }
+.howto summary { font-weight: 700; cursor: pointer; }
+.howto ol { margin: 8px 0 2px; padding-left: 20px; line-height: 1.55; }
+kbd { font: inherit; font-size: 0.8em; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.demo { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 6px 14px; margin-bottom: 12px; }
+.demo-item { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 0.92rem; }
+.demo-item:last-child { border-bottom: 0; }
+.demo-item s { color: var(--muted); font-weight: 400; margin-left: 4px; }
+.web-link { display: block; text-align: center; margin-top: 14px; color: var(--accent); font-weight: 600; text-decoration: none; font-size: 0.92rem; }

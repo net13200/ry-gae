@@ -41,7 +41,7 @@ function guessHome() {
   return 'USD';
 }
 const state = Object.assign({ active: 'USD', amount: 100, scanSrc: 'auto', lastScanSrc: 'JPY', zoom: 1, home: null }, store.get(STATE_KEY) || {});
-if (!state.home || !CURRENCIES.some((c) => c.code === state.home)) state.home = guessHome();
+if (!state.home || !CURRENCIES.some((c) => c.code === state.home)) { state.home = guessHome(); store.set(STATE_KEY, state); }
 const saveState = () => store.set(STATE_KEY, state);
 
 function convert(amount, from, to) {

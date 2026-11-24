@@ -1,7 +1,8 @@
 // Bump on every release so old caches are cleared.
-const CACHE = 'ryogae-v11';
+const CACHE = 'ryogae-v12';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon.svg',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
+  'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
+  'bookmarklet.html', 'bookmarklet/ryogae-prices.js'];
 const NETWORK_TIMEOUT_MS = 3000;
 // Separate cache for the text reader so app updates don't throw away (and re-download) ~4 MB.
 // Change the name only when the files in vendor/tesseract change.
