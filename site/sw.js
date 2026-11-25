@@ -1,5 +1,5 @@
 // Bump on every release so old caches are cleared.
-const CACHE = 'ryogae-v12';
+const CACHE = 'ryogae-v13';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon.svg',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png',
   'bookmarklet.html', 'bookmarklet/ryogae-prices.js'];

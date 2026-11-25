@@ -217,11 +217,13 @@ let ocrMode = null;               // which parameter set the worker currently ha
 let ocrQueue = Promise.resolve(); // one recognition at a time (live loop vs frozen-frame analysis)
 const OCR_MODES = {
   // '+' so "+300" isn't read as "4300"; block mode copes with a stray partial line.
-  live: { tessedit_char_whitelist: '0123456789.,+$€¥₩₪', tessedit_pageseg_mode: '6' },
+  live: { tessedit_char_whitelist: '', tessedit_pageseg_mode: '6' },
   // Find every bit of text in a whole frame (letters allowed so foreign text isn't forced into digits).
   scan: { tessedit_char_whitelist: '', tessedit_pageseg_mode: '11' },
+  // Automatic page layout (columns, blocks) — complements sparse mode.
+  layout: { tessedit_char_whitelist: '', tessedit_pageseg_mode: '3' },
   // Re-read one candidate price as a single line.
-  word: { tessedit_char_whitelist: '0123456789.,+$€¥₩₪', tessedit_pageseg_mode: '7' },
+  word: { tessedit_char_whitelist: '', tessedit_pageseg_mode: '7' },
 };
 function withOcr(fn) {
   const run = ocrQueue.then(fn, fn);
@@ -503,7 +505,7 @@ function pickPrice(lines) {
 // Pull the most price-like number from OCR text.
 function parsePrice(text) {
   const t = text.replace(/(?<=\d)[Oo]|[Oo](?=\d)/g, '0');
-  const re = /(S\$|[$€¥₩₪]|円|원|NIS|USD|EUR|SGD|JPY|KRW|ILS)?\s*(\d[\d,.\s]*\d|\d)\s*(円|원|₪|€|NIS|USD|EUR|SGD|JPY|KRW|ILS|yen|won|euros?)?/gi;
+  const re = /(S\$|[$€¥₩₪]|円|원|NIS|USD|EUR|SGD|JPY|KRW|ILS)?\s*(\d{1,3}(?:[,.]\s?\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s*(円|원|₪|€|NIS|USD|EUR|SGD|JPY|KRW|ILS|yen|won|euros?)?/gi;
   let best = null;
   let m;
   while ((m = re.exec(t))) {
@@ -731,33 +733,74 @@ async function findPrices(img, onFound, onProgress, cancelled) {
   const pass = document.createElement('canvas');
   const { pad } = binarizeInto(pass, img, 0, 0, img.width, img.height, W);
   const f = img.width / W;
-  const data = await recognize(pass, 'scan');
-  if (cancelled()) return results;
-  const words = (data.words || []).map((w) => ({ text: w.text.trim(), x: (w.bbox.x0 - pad) * f, y: (w.bbox.y0 - pad) * f, w: (w.bbox.x1 - w.bbox.x0) * f, h: (w.bbox.y1 - w.bbox.y0) * f }))
-    .filter((w) => w.text && w.h > 6 && w.w > 2);
-  const cands = groupWords(words).filter((g) => /\d/.test(g.text));
-  onProgress(0.3);
+  // Pass 1 twice: automatic page layout finds prices in columns/blocks (e.g. Japanese menus), sparse mode
+  // finds scattered ones. Merge what both see.
+  const words = [];
+  for (const mode of ['layout', 'scan']) {
+    const data = await recognize(pass, mode);
+    if (cancelled()) return results;
+    for (const w of data.words || []) {
+      const t = w.text.trim();
+      const box = { x: (w.bbox.x0 - pad) * f, y: (w.bbox.y0 - pad) * f, w: (w.bbox.x1 - w.bbox.x0) * f, h: (w.bbox.y1 - w.bbox.y0) * f };
+      if (!t || box.h <= 6 || box.w <= 2) continue;
+      if (words.some((o) => overlapRatio(o, box) > 0.5)) continue;
+      const syms = (w.symbols || []).map((sy) => ({ t: sy.text, x0: (sy.bbox.x0 - pad) * f, x1: (sy.bbox.x1 - pad) * f }));
+      words.push({ text: t, ...box, syms, conf: w.confidence });
+    }
+    onProgress(mode === 'layout' ? 0.2 : 0.35);
+  }
+  // Candidates: groups containing digits that are mostly digits (not a word like "LEVIZ74X").
+  const cands = groupWords(words).filter((g) => {
+    const digits = (g.text.match(/\d/g) || []).length, letters = (g.text.match(/\p{L}/gu) || []).length;
+    return digits && digits / (digits + letters) > 0.5;
+  });
   const crop = document.createElement('canvas');
   for (let i = 0; i < cands.length; i++) {
     if (cancelled()) return results;
     const c = cands[i];
-    const mx = c.h * 0.6, my = c.h * 0.35;
-    const sx = Math.max(0, c.x - mx), sy = Math.max(0, c.y - my);
-    const sw = Math.min(img.width - sx, c.w + mx * 2), sh = Math.min(img.height - sy, c.h + my * 2);
+    // Re-read just the number: neighbours like 税込 / 円 / ")" otherwise get read as extra digits.
+    const run = digitRun(c);
+    const x0 = run ? run.x0 - c.h * (run.prefix ? 1.1 : 0.5) : c.x - c.h * 0.6;
+    const x1 = run ? run.x1 + c.h * 0.5 : c.x + c.w + c.h * 0.6;
+    const my = c.h * 0.35;
+    const sx = Math.max(0, x0), sy = Math.max(0, c.y - my);
+    const sw = Math.min(img.width - sx, x1 - sx), sh = Math.min(img.height - sy, c.h + my * 2);
+    if (sw < 4 || sh < 4) continue;
     binarizeInto(crop, img, sx, sy, sw, sh, Math.min(900, Math.max(60, Math.round(sw / sh * 64))));
     const d = await recognize(crop, 'word');
     const text = d.text.trim();
-    if (window.DEBUG_OCR) console.log('cand', JSON.stringify(c.text), '→', JSON.stringify(text), Math.round(d.confidence));
+    if (window.DEBUG_OCR) console.log('cand', JSON.stringify(c.text), run ? JSON.stringify(run.text) : '-', '→', JSON.stringify(text), Math.round(d.confidence));
     const p = parsePrice(text);
+    const runClean = run && /^\d{1,3}(,\d{3})*(\.\d{1,2})?$|^\d+(\.\d{1,2})?$/.test(run.text) && run.text.replace(/\D/g, '').length >= 2;
+    const before = results.length;
     if (p) {
-      // Keep it if both reads agree on the digits (one contains the other — either read may include a
-      // misread 원/円 or a neighbouring digit), or the focused re-read is clean and very confident.
-      const d1 = c.text.replace(/\D/g, ''), d2 = String(p.raw).replace(/\D/g, '');
+      // Keep it if both reads agree on the digits (one contains the other, or they share 3+ in a row),
+      // or the focused re-read is clean and very confident.
+      const d1 = (run ? run.text : c.text).replace(/\D/g, ''), d2 = String(p.raw).replace(/\D/g, '');
       const agree = digitsAgree(d1, d2);
       const clean = /^\+?\s*[$€¥₩₪]?\s*\d[\d,.\s]*[$€¥₩₪]?$/.test(text);
-      if (agree || (clean && d.confidence >= 80)) accept(p.value, p.detected, { x: c.x, y: c.y, w: c.w, h: c.h }, `${c.text}→${text}(${Math.round(d.confidence)})`);
+      // A suffix like 円 or ")" read as extra trailing digits ("858円)" → "85811") while the first pass
+      // saw a non-digit there ("858F)"): trust the first pass's number.
+      const p1 = parsePrice(c.text);
+      if (p1) {
+        const r1 = String(p1.raw).replace(/\D/g, '');
+        const after = c.text.slice(c.text.indexOf(p1.raw) + p1.raw.length);
+        // Only when what follows is letter-like junk (円 → "F", "PJ", "F1"), not a misread digit ("1,6/0").
+        if (r1.length >= 2 && d2.length > r1.length && d2.startsWith(r1) && /^\s*\p{L}{1,2}[1)\]|}]?\s*$/u.test(after)) p.value = p1.value;
+      }
+      // The focused re-read gained or lost digits while the first pass saw a clean number ("825" → "$25",
+      // "1,280" → "2428083"): trust the first pass.
+      if (runClean && run.text.replace(/\D/g, '').length !== d2.length) {
+        p.value = normalizeNumber(run.text);
+      }
+      const detected = p.detected || (run && run.prefix === '¥' ? 'JPY' : null) || (p1 && p1.detected) || null;
+      if (agree || (clean && d.confidence >= 80)) accept(p.value, detected, { x: c.x, y: c.y, w: c.w, h: c.h }, `${c.text}|${run ? run.text : ''}→${text}(${Math.round(d.confidence)})`);
     }
-    onProgress(0.3 + 0.7 * (i + 1) / cands.length);
+    // The re-read failed but the first pass saw a clean number with good confidence: use that.
+    if (results.length === before && runClean && c.conf >= 75) {
+      accept(normalizeNumber(run.text), run.prefix === '¥' ? 'JPY' : null, { x: c.x, y: c.y, w: c.w, h: c.h }, `${c.text}|${run.text}(pass1 ${Math.round(c.conf)})`);
+    }
+    onProgress(0.35 + 0.65 * (i + 1) / cands.length);
   }
   return results;
 }
@@ -766,7 +809,7 @@ async function findPrices(img, onFound, onProgress, cancelled) {
 // a digit misread as "/"), or they share a run of 3+ digits ("3500" vs "5004").
 function digitsAgree(a, b) {
   const [s, l] = a.length <= b.length ? [a, b] : [b, a];
-  if (s.length < 2) return false;
+  if (s.length < 2 || s.length * 2 < l.length) return false;
   let i = 0;
   for (const ch of l) if (ch === s[i]) i++;
   if (i === s.length) return true;
@@ -778,23 +821,58 @@ function digitsAgree(a, b) {
 function groupWords(words) {
   words = words.slice().sort((a, b) => a.x - b.x);
   const groups = [];
+  // Join only things that can be part of a price: anything with a digit, or a short non-letter token ("¥", "+").
+  const joinable = (t) => /\d/.test(t) || (t.length <= 3 && !/\p{L}/u.test(t));
   for (const w of words) {
     const g = groups.find((g) => {
       const last = g.last;
       const overlap = Math.min(last.y + last.h, w.y + w.h) - Math.max(last.y, w.y);
       const hRatio = Math.max(last.h, w.h) / Math.min(last.h, w.h);
       const gap = w.x - (last.x + last.w);
-      const shortOrNumeric = (t) => t.length <= 3 || /\d/.test(t);
       return overlap > 0.5 * Math.min(last.h, w.h) && hRatio < 1.6 && gap < 0.9 * Math.max(last.h, w.h) && gap > -last.h &&
-        shortOrNumeric(last.text) && shortOrNumeric(w.text);
+        joinable(last.text) && joinable(w.text);
     });
     if (g) {
       const x1 = Math.max(g.x + g.w, w.x + w.w), y1 = Math.max(g.y + g.h, w.y + w.h);
       g.x = Math.min(g.x, w.x); g.y = Math.min(g.y, w.y); g.w = x1 - g.x; g.h = y1 - g.y;
-      g.text += w.text; g.last = w;
-    } else groups.push({ ...w, last: w });
+      g.text += w.text; g.syms = g.syms.concat(w.syms || []); g.conf = Math.min(g.conf, w.conf); g.last = w;
+    } else groups.push({ ...w, syms: (w.syms || []).slice(), last: w });
   }
   return groups;
+}
+
+// The horizontal span of the main number inside a candidate (longest run of digits/separators, allowing one
+// misread character inside, e.g. "1,6/0"), plus any currency sign right before it.
+function digitRun(c) {
+  const sy = c.syms.slice().sort((a, b) => a.x0 - b.x0);
+  if (!sy.length) return null;
+  let best = null;
+  for (let i = 0; i < sy.length; i++) {
+    if (!/\d/.test(sy[i].t)) continue;
+    let j = i, slips = 0;
+    while (j + 1 < sy.length) {
+      const nt = sy[j + 1].t;
+      if (/^[\d.,]$/.test(nt)) { j++; continue; }
+      if (slips === 0 && j + 2 < sy.length && /\d/.test(sy[j + 2].t)) { slips++; j++; continue; }
+      break;
+    }
+    const text = sy.slice(i, j + 1).map((x) => x.t).join('');
+    const n = (text.match(/\d/g) || []).length;
+    if (!best || n > best.n) best = { n, i, j, text };
+    i = j;
+  }
+  if (!best) return null;
+  const before = best.i > 0 ? sy[best.i - 1].t : '';
+  // "#" and "\\" are how the English model often reads a ¥ — only assume that in Japan.
+  const yenLike = before === '#' || before === '\\';
+  const prefix = /^[¥$€₩₪+]$/.test(before) ? before : yenLike && LOCAL_CODE === 'JPY' ? '¥' : yenLike ? '?' : '';
+  return { text: best.text, x0: sy[best.i].x0, x1: sy[best.j].x1, prefix };
+}
+
+function overlapRatio(a, b) {
+  const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  return (ix * iy) / Math.min(a.w * a.h, b.w * b.h);
 }
 
 function addMark(p) {
