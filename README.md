@@ -5,7 +5,8 @@ A tiny, offline-capable web app for converting between **NIS (₪), USD ($), EUR
 - **Type** in any currency — the other three update instantly.
 - **Point your camera** at a price tag — no photo needed. The app reads the number inside the frame live and shows it converted. Currency is auto-detected from symbols (¥ 円 ₩ 원 ₪ $ € S$) or you can pick it.
 - **Freeze & find prices** — freeze the camera frame (kept in memory only, never saved) and the app finds every price in it; tap one to see it converted.
-- **Prices on websites** — a bookmarklet (built at `bookmarklet.html` with your home currency and current rates) tags every price on a web page (₩, 원, 만원, $, €, ¥/円, ₪, S$) with its home-currency value; run it again to remove.
+- **Prices on websites** — a bookmarklet (built at `bookmarklet.html` with your home currency and current rates) tags every price on a web page (₩, 원, 만원, $, €, ¥/円, kanji numbers like 三〇八〇円, ₪, S$) with its home-currency value; run it again to remove.
+- **Paste a price** — paste copied text (e.g. from iPhone Live Text) and pick from the prices found; understands kanji numbers (三〇八〇円, 二千五百八十円, 1万2千円), full-width digits, 만원/천원 and currency symbols.
 - Text reading runs entirely on the phone and works offline after first use.
 - Rates come from [open.er-api.com](https://open.er-api.com) (falls back to ECB via frankfurter.app) and are cached for offline use.
 - Installable: Chrome/Android show an Install button; on iPhone use Share → Add to Home Screen.

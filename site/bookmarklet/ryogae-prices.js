@@ -15,15 +15,42 @@
   var MARK = { '$': 'USD', 'us$': 'USD', 'usd': 'USD', '€': 'EUR', 'eur': 'EUR', 'euro': 'EUR', 'euros': 'EUR',
     's$': 'SGD', 'sgd': 'SGD', '₩': 'KRW', '￦': 'KRW', '원': 'KRW', 'krw': 'KRW', 'won': 'KRW',
     '¥': 'JPY', '￥': 'JPY', '円': 'JPY', '엔': 'JPY', 'jpy': 'JPY', 'yen': 'JPY', '₪': 'ILS', 'ils': 'ILS', 'nis': 'ILS' };
-  var NUM = '(\\d{1,3}(?:[,.\\u00a0 ]\\d{3})+(?:[.,]\\d{1,2})?|\\d+(?:[.,]\\d{1,2})?)';
+  var D = '[0-9\\uff10-\\uff19]', SEP = '[,.\\uff0c\\uff0e\\u00a0 ]', DEC = '[.,\\uff0c\\uff0e]';
+  var NUM = '(' + D + '{1,3}(?:' + SEP + D + '{3})+(?:' + DEC + D + '{1,2})?|' + D + '+(?:' + DEC + D + '{1,2})?)';
   var PRE = '(S\\$|US\\$|\\$|€|₩|￦|¥|￥|₪|(?:KRW|USD|EUR|JPY|ILS|SGD|NIS)(?![A-Za-z]))';
   var POST = '(원|円|엔|₩|￦|€|₪|(?:KRW|USD|EUR|JPY|ILS|SGD|NIS|won|yen|euros?)(?![A-Za-z]))';
   var MAN = '(\\d+(?:[.,]\\d+)?)\\s?만(?:\\s?(\\d+)\\s?천)?\\s?원|(\\d+)\\s?천\\s?원';
-  var RE = new RegExp(MAN + '|' + PRE + '\\s?' + NUM + '|' + NUM + '\\s?' + POST, 'gi');
-  var FULL = new RegExp('^(?:' + MAN + '|' + PRE + '\\s?' + NUM + '|' + NUM + '\\s?' + POST + ')$', 'i');
+  var KC = '[〇○零一二三四五六七八九十百千万萬億0-9\\uff10-\\uff19,\\uff0c]';
+  var KAN = '(?:[¥￥]\\s?)?(' + KC + '*[〇○零一二三四五六七八九十百千万萬億]' + KC + '*)\\s?円';
+  var RE = new RegExp(MAN + '|' + PRE + '\\s?' + NUM + '|' + NUM + '\\s?' + POST + '|' + KAN, 'gi');
+  var FULL = new RegExp('^(?:' + MAN + '|' + PRE + '\\s?' + NUM + '|' + NUM + '\\s?' + POST + '|' + KAN + ')$', 'i');
+  var KD = { '〇': 0, '○': 0, '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+  var KU = { '十': 10, '百': 100, '千': 1000 }, KB = { '万': 1e4, '萬': 1e4, '億': 1e8 };
+  var DIGITISH = /[0-9０-９〇一二三四五六七八九十百千万]/;
+  function wide(t) {
+    return t.replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xfee0); })
+      .replace(/，/g, ',').replace(/．/g, '.');
+  }
+  function kanji(s) {
+    s = wide(s).replace(/,/g, '');
+    var i, ch, total = 0, section = 0, num = null, d = '';
+    if (!/[十百千万萬億]/.test(s)) {
+      for (i = 0; i < s.length; i++) { ch = s.charAt(i); d += (ch in KD) ? KD[ch] : ch; }
+      return /^[0-9]+$/.test(d) ? +d : NaN;
+    }
+    for (i = 0; i < s.length; i++) {
+      ch = s.charAt(i);
+      if (/[0-9]/.test(ch)) { num = (num || 0) * 10 + (+ch); }
+      else if (ch in KD) { num = (num || 0) * 10 + KD[ch]; }
+      else if (ch in KU) { section += (num === null ? 1 : num) * KU[ch]; num = null; }
+      else if (ch in KB) { total += (section + (num || 0)) * KB[ch]; section = 0; num = null; }
+      else { return NaN; }
+    }
+    return total + section + (num || 0);
+  }
 
   function toNumber(raw) {
-    raw = raw.replace(/[  ]/g, '');
+    raw = wide(raw).replace(/[  ]/g, '');
     var last = Math.max(raw.lastIndexOf('.'), raw.lastIndexOf(','));
     if (last === -1) { return parseFloat(raw); }
     if (raw.length - last - 1 === 3) { return parseFloat(raw.replace(/[.,]/g, '')); }
@@ -32,6 +59,7 @@
   function fromMatch(m) {
     if (m[1] !== undefined) { return { v: parseFloat(m[1].replace(',', '.')) * 10000 + (m[2] ? +m[2] * 1000 : 0), c: 'KRW' }; }
     if (m[3] !== undefined) { return { v: +m[3] * 1000, c: 'KRW' }; }
+    if (m[8] !== undefined) { return { v: kanji(m[8]), c: 'JPY' }; }
     if (m[4] !== undefined) { return { v: toNumber(m[5]), c: MARK[m[4].toLowerCase()] }; }
     return { v: toNumber(m[6]), c: MARK[m[7].toLowerCase()] };
   }
@@ -75,7 +103,7 @@
 
   function scanText(root) {
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), nodes = [], n;
-    while ((n = walker.nextNode())) { if (/\d/.test(n.nodeValue) && !seen.has(n)) { nodes.push(n); } }
+    while ((n = walker.nextNode())) { if (DIGITISH.test(n.nodeValue) && !seen.has(n)) { nodes.push(n); } }
     var count = 0;
     for (var i = 0; i < nodes.length; i++) {
       var node = nodes[i];
@@ -101,7 +129,7 @@
       var el = els[i];
       if (seen.has(el) || !el.childElementCount || el.childElementCount > 5 || el.querySelector('[data-ryogae]')) { continue; }
       var t = ownText(el);
-      if (t.length > 32 || !/\d/.test(t)) { continue; }
+      if (t.length > 32 || !DIGITISH.test(t)) { continue; }
       var m = t.match(FULL);
       if (!m) { continue; }
       var inner = false;
@@ -111,6 +139,28 @@
       if (!usable(p)) { continue; }
       seen.add(el);
       el.appendChild(makeBadge(p));
+      count++;
+    }
+    return count + scanPairs(els);
+  }
+
+  /* Number and currency in two neighbouring elements with no wrapper of their own:
+     <span>三〇八〇</span><span>円</span> or <i>₩</i><b>12,000</b>. */
+  function scanPairs(els) {
+    var count = 0;
+    for (var i = 0; i < els.length; i++) {
+      var a = els[i], b = a.nextElementSibling;
+      if (!b || a.childElementCount || b.childElementCount || seen.has(a) || seen.has(b) || seen.has(a.parentNode)) { continue; }
+      var ta = ownText(a), tb = ownText(b);
+      if (!ta || !tb || !((ta.length <= 20 && tb.length <= 4) || (ta.length <= 4 && tb.length <= 20))) { continue; }
+      var joined = ta + tb;
+      if (joined.length > 24 || !DIGITISH.test(joined) || FULL.test(ta) || FULL.test(tb)) { continue; }
+      var m = joined.match(FULL);
+      if (!m || skippable(a)) { continue; }
+      var p = fromMatch(m);
+      if (!usable(p)) { continue; }
+      seen.add(a); seen.add(b);
+      b.parentNode.insertBefore(makeBadge(p), b.nextSibling);
       count++;
     }
     return count;

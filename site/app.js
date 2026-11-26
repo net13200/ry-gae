@@ -127,6 +127,65 @@ async function updateRates(force = false) {
 }
 refreshBtn.addEventListener('click', () => updateRates(true));
 
+// ---------- Prices in copied text (kanji numbers, 만원, symbols) ----------
+const KANJI_DIGIT = { '〇': 0, '○': 0, '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+const KANJI_UNIT = { '十': 10, '百': 100, '千': 1000 };
+const KANJI_BIG = { '万': 1e4, '萬': 1e4, '億': 1e8 };
+
+// "三〇八〇" → 3080 (positional), "二千五百八十" → 2580, "1万2千" → 12000, "千" → 1000.
+function kanjiToNumber(s) {
+  s = s.replace(/[,，]/g, '');
+  if (!/[十百千万萬億]/.test(s)) {
+    const d = [...s].map((ch) => (ch in KANJI_DIGIT ? KANJI_DIGIT[ch] : ch)).join('');
+    return /^\d+$/.test(d) ? +d : NaN;
+  }
+  let total = 0, section = 0, num = null;
+  for (const ch of s) {
+    if (/\d/.test(ch)) num = (num || 0) * 10 + +ch;
+    else if (ch in KANJI_DIGIT) num = (num || 0) * 10 + KANJI_DIGIT[ch];
+    else if (ch in KANJI_UNIT) { section += (num === null ? 1 : num) * KANJI_UNIT[ch]; num = null; }
+    else if (ch in KANJI_BIG) { total += (section + (num || 0)) * KANJI_BIG[ch]; section = 0; num = null; }
+    else return NaN;
+  }
+  return total + section + (num || 0);
+}
+
+// Full-width forms (３，０８０円, ￥, ￦, ＄) to their normal equivalents.
+function normalizeWidth(t) {
+  return t.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/，/g, ',').replace(/．/g, '.').replace(/￥/g, '¥').replace(/￦/g, '₩').replace(/＄/g, '$').replace(/\u3000/g, ' ');
+}
+
+// Every price in a piece of text, in order: [{ value, code, raw }]. code may be null when nothing says.
+function findPricesInText(text) {
+  let t = normalizeWidth(text);
+  const found = [];
+  const take = (re, fn) => {
+    t = t.replace(re, (...m) => {
+      const r = fn(m);
+      if (r && isFinite(r.value) && r.value > 0) found.push({ ...r, raw: m[0].trim(), at: m[m.length - 2] });
+      return ' '.repeat(m[0].length); // keep positions, stop later patterns re-reading this text
+    });
+  };
+  const KN = '[〇○零一二三四五六七八九十百千万萬億0-9,]';
+  // Yen with kanji numbers (or mixed like 1万2千円); plain "1,280円" is handled below.
+  take(new RegExp(`(?:¥\\s?)?(${KN}*[〇○零一二三四五六七八九十百千万萬億]${KN}*)\\s*円`, 'g'), (m) => ({ value: kanjiToNumber(m[1]), code: 'JPY' }));
+  take(new RegExp(`¥\\s?(${KN}*[〇○零一二三四五六七八九十百千万萬億]${KN}*)`, 'g'), (m) => ({ value: kanjiToNumber(m[1]), code: 'JPY' }));
+  // Korean 만/천 amounts: 5만원, 1만 2천원, 3천원.
+  take(/(\d+(?:[.,]\d+)?)\s?만(?:\s?(\d+)\s?천)?\s?원|(\d+)\s?천\s?원/g,
+    (m) => ({ value: m[1] !== undefined ? parseFloat(m[1].replace(',', '.')) * 1e4 + (m[2] ? +m[2] * 1000 : 0) : +m[3] * 1000, code: 'KRW' }));
+  // Everything else: symbols/codes before or after a number.
+  take(/(S\$|US\$|[$€¥₩₪]|NIS|USD|EUR|SGD|JPY|KRW|ILS)?\s*(\d{1,3}(?:[,.]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s*(円|원|₪|€|NIS|USD|EUR|SGD|JPY|KRW|ILS|yen|won|euros?)?/gi,
+    (m) => {
+      const code = symbolToCode(m[1] === 'US$' ? '$' : (m[1] || m[3] || ''));
+      return { value: normalizeNumber(m[2]), code: m[1] === 'US$' ? 'USD' : code };
+    });
+  found.sort((a, b) => a.at - b.at);
+  // If any price names its currency, ignore bare numbers (quantities, dates…).
+  const marked = found.filter((f) => f.code);
+  return (marked.length ? marked : found).map(({ value, code, raw }) => ({ value, code, raw }));
+}
+
 // ---------- Converter ----------
 const conv = document.getElementById('converter');
 const inputs = {};
@@ -640,6 +699,75 @@ torchBtn.addEventListener('click', async () => {
   try { await track.applyConstraints({ advanced: [{ torch: on }] }); torchBtn.classList.toggle('on', on); } catch {}
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden && running) closeScanner(); });
+
+// ---------- Paste a price ----------
+const pastedEl = document.getElementById('pasted');
+
+function applyPrice(p) {
+  const code = p.code || LOCAL_CODE || state.active;
+  state.active = code;
+  state.amount = fixForCurrency(p.value, code);
+  saveState();
+  render();
+  inputs[code].closest('.row').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function showPasted(text) {
+  const prices = findPricesInText(text || '');
+  pastedEl.hidden = false;
+  pastedEl.innerHTML = '';
+  if (!prices.length) {
+    pastedEl.innerHTML = '<div class="msg">No price found in the copied text.</div>';
+    return false;
+  }
+  if (prices.length === 1) {
+    applyPrice(prices[0]);
+    const c = prices[0].code || LOCAL_CODE || state.active;
+    pastedEl.innerHTML = `<div class="msg">Pasted “${escapeHtml(prices[0].raw)}” → ${fmt(fixForCurrency(prices[0].value, c), c, true)}</div>`;
+    return true;
+  }
+  const msg = document.createElement('div');
+  msg.className = 'msg';
+  msg.textContent = `${prices.length} prices found — tap one:`;
+  pastedEl.appendChild(msg);
+  for (const p of prices.slice(0, 12)) {
+    const c = p.code || LOCAL_CODE || state.active;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.innerHTML = `${fmt(fixForCurrency(p.value, c), c, true)}<small>${escapeHtml(p.raw)}</small>`;
+    b.addEventListener('click', () => {
+      applyPrice(p);
+      for (const x of pastedEl.querySelectorAll('button')) x.style.borderColor = '';
+      b.style.borderColor = 'var(--accent)';
+    });
+    pastedEl.appendChild(b);
+  }
+  return true;
+}
+
+function escapeHtml(t) { return t.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+document.getElementById('paste').addEventListener('click', async () => {
+  try {
+    showPasted(await navigator.clipboard.readText());
+  } catch {
+    pastedEl.hidden = false;
+    pastedEl.innerHTML = '<div class="msg">Couldn’t read the clipboard here — tap a currency box and paste into it instead.</div>';
+  }
+});
+
+// Pasting into any currency box: if the text holds a price (円, 원, kanji numbers…), use it.
+for (const c of CURRENCIES) {
+  inputs[c.code].addEventListener('paste', (e) => {
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    if (/^\s*[\d.,]+\s*$/.test(text)) return; // a plain number: normal paste into this box
+    if (findPricesInText(text).length) {
+      e.preventDefault();
+      inputs[c.code].blur();
+      showPasted(text);
+    }
+  });
+}
 
 // ---------- Boot ----------
 applyHome();
